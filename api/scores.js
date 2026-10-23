@@ -1,9 +1,5 @@
-const { Redis } = require('@upstash/redis');
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
-});
+const getRedis = require('./_redis.js');
+let redis;
 
 const MAX_SCORE = 100000;           // anything above this is rejected
 const day = () => new Date().toISOString().slice(0, 10); // UTC day
@@ -11,6 +7,7 @@ const okW = (w) => /^0x[a-fA-F0-9]{40}$/.test(w);
 const okX = (x) => /^[A-Za-z0-9_]{1,15}$/.test(x);
 
 async function topRows(d) {
+  redis = redis || getRedis();
   const flat = await redis.zrange('lb:' + d, 0, 19, { rev: true, withScores: true });
   const rows = [];
   for (let i = 0; i < flat.length; i += 2) {
@@ -26,6 +23,7 @@ module.exports = async (req, res) => {
     if (req.method === 'GET') return res.status(200).json({ rows: await topRows(day()) });
     if (req.method !== 'POST') return res.status(405).json({ error: 'method' });
 
+    redis = redis || getRedis();
     const ip = String(req.headers['x-forwarded-for'] || 'x').split(',')[0].trim();
     const rl = 'rl:' + ip;
     const n = await redis.incr(rl);
@@ -47,6 +45,8 @@ module.exports = async (req, res) => {
     await redis.expire('p:' + d + ':' + wallet, 60 * 60 * 24 * 7);
     return res.status(200).json({ rows: await topRows(d) });
   } catch (e) {
-    return res.status(500).json({ error: 'server' });
+    console.error('scores api error:', e && e.message);
+    const admin = process.env.ADMIN_KEY && req.query && req.query.key === process.env.ADMIN_KEY;
+    return res.status(500).json({ error: 'server', detail: admin ? String(e && e.message) : undefined });
   }
 };
